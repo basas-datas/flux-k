@@ -1,14 +1,15 @@
-import runpod
-from runpod.serverless.utils import rp_upload
+import copy
 import os
-import websocket
 import base64
+import binascii  # Base64 에러 처리를 위해 import
 import json
-import uuid
 import logging
+import uuid
 import urllib.request
 import urllib.parse
-import binascii # Base64 에러 처리를 위해 import
+import websocket
+import runpod
+from runpod.serverless.utils import rp_upload
 
 
 # 로깅 설정
@@ -127,9 +128,23 @@ def get_images(ws, prompt):
 
     return output_images
 
-def load_workflow(workflow_path):
-    with open(workflow_path, 'r') as file:
-        return json.load(file)
+def get_workflow_from_input(job_input):
+    """Return a deep-copied workflow provided by the client."""
+    workflow_input = job_input.get("workflow")
+    if workflow_input is None:
+        raise ValueError("Workflow data must be provided in the job input.")
+
+    if isinstance(workflow_input, str):
+        try:
+            workflow_data = json.loads(workflow_input)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid workflow JSON string provided by client.") from exc
+    elif isinstance(workflow_input, dict):
+        workflow_data = workflow_input
+    else:
+        raise ValueError("Workflow must be a JSON string or object.")
+
+    return copy.deepcopy(workflow_data)
 
 def handler(job):
     job_input = job.get("input", {})
@@ -146,7 +161,11 @@ def handler(job):
         image_path = save_data_if_base64(image_input, task_id, "input_image.jpg")
     
 
-    prompt = load_workflow("/flux_kontext_example.json")
+    try:
+        prompt = get_workflow_from_input(job_input)
+    except ValueError as workflow_error:
+        logger.error(str(workflow_error))
+        return {"error": str(workflow_error)}
 
     prompt["41"]["inputs"]["image"] = image_path
     prompt["6"]["inputs"]["text"] = job_input["prompt"]
