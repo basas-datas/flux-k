@@ -1,7 +1,7 @@
 import copy
 import os
 import base64
-import binascii  # Base64 에러 처리를 위해 import
+import binascii
 import json
 import logging
 import uuid
@@ -12,18 +12,21 @@ import runpod
 from runpod.serverless.utils import rp_upload
 
 
-# 로깅 설정
+# ================== LOGGING ==================
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# CUDA 검사 및 설정
+
+# ================== CUDA CHECK ==================
+
 def check_cuda_availability():
-    """CUDA 사용 가능 여부를 확인하고 환경 변수를 설정합니다."""
+    """Check CUDA availability and configure environment."""
     try:
         import torch
         if torch.cuda.is_available():
             logger.info("✅ CUDA is available and working")
-            os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
             return True
         else:
             logger.error("❌ CUDA is not available")
@@ -32,7 +35,7 @@ def check_cuda_availability():
         logger.error(f"❌ CUDA check failed: {e}")
         raise RuntimeError(f"CUDA initialization failed: {e}")
 
-# CUDA 검사 실행
+
 try:
     cuda_available = check_cuda_availability()
     if not cuda_available:
@@ -43,186 +46,172 @@ except Exception as e:
     exit(1)
 
 
+# ================== GLOBALS ==================
 
-server_address = os.getenv('SERVER_ADDRESS', '127.0.0.1')
+server_address = os.getenv("SERVER_ADDRESS", "127.0.0.1")
 client_id = str(uuid.uuid4())
-def save_data_if_base64(data_input, temp_dir, output_filename):
-    """
-    입력 데이터가 Base64 문자열인지 확인하고, 맞다면 파일로 저장 후 경로를 반환합니다.
-    만약 일반 경로 문자열이라면 그대로 반환합니다.
-    """
-    # 입력값이 문자열이 아니면 그대로 반환
-    if not isinstance(data_input, str):
-        return data_input
 
+
+# ================== HELPERS ==================
+
+def save_base64_image(data_base64: str, temp_dir: str, filename: str) -> str:
+    """
+    Decode a base64 image string and save it to disk.
+    Returns the absolute file path.
+    """
     try:
-        # Base64 문자열은 디코딩을 시도하면 성공합니다.
-        decoded_data = base64.b64decode(data_input)
-        
-        # 디렉토리가 존재하지 않으면 생성
+        decoded = base64.b64decode(data_base64)
         os.makedirs(temp_dir, exist_ok=True)
-        
-        # 디코딩에 성공하면, 임시 파일로 저장합니다.
-        file_path = os.path.abspath(os.path.join(temp_dir, output_filename))
-        with open(file_path, 'wb') as f: # 바이너리 쓰기 모드('wb')로 저장
-            f.write(decoded_data)
-        
-        # 저장된 파일의 경로를 반환합니다.
-        print(f"✅ Base64 입력을 '{file_path}' 파일로 저장했습니다.")
+        file_path = os.path.abspath(os.path.join(temp_dir, filename))
+        with open(file_path, "wb") as f:
+            f.write(decoded)
+        logger.info(f"Saved base64 image to: {file_path}")
         return file_path
+    except (binascii.Error, ValueError) as e:
+        raise ValueError("Invalid base64 image input") from e
 
-    except (binascii.Error, ValueError):
-        # 디코딩에 실패하면, 일반 경로로 간주하고 원래 값을 그대로 반환합니다.
-        print(f"➡️ '{data_input}'은(는) 파일 경로로 처리합니다.")
-        return data_input
-    
+
 def queue_prompt(prompt):
     url = f"http://{server_address}:8188/prompt"
     logger.info(f"Queueing prompt to: {url}")
-    p = {"prompt": prompt, "client_id": client_id}
-    data = json.dumps(p).encode('utf-8')
+    payload = {"prompt": prompt, "client_id": client_id}
+    data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data)
     return json.loads(urllib.request.urlopen(req).read())
 
+
 def get_image(filename, subfolder, folder_type):
     url = f"http://{server_address}:8188/view"
-    logger.info(f"Getting image from: {url}")
-    data = {"filename": filename, "subfolder": subfolder, "type": folder_type}
-    url_values = urllib.parse.urlencode(data)
-    with urllib.request.urlopen(f"{url}?{url_values}") as response:
+    logger.info(f"Fetching image from: {url}")
+    params = {
+        "filename": filename,
+        "subfolder": subfolder,
+        "type": folder_type,
+    }
+    query = urllib.parse.urlencode(params)
+    with urllib.request.urlopen(f"{url}?{query}") as response:
         return response.read()
+
 
 def get_history(prompt_id):
     url = f"http://{server_address}:8188/history/{prompt_id}"
-    logger.info(f"Getting history from: {url}")
+    logger.info(f"Fetching history from: {url}")
     with urllib.request.urlopen(url) as response:
         return json.loads(response.read())
 
+
 def get_images(ws, prompt):
-    prompt_id = queue_prompt(prompt)['prompt_id']
+    prompt_id = queue_prompt(prompt)["prompt_id"]
     output_images = {}
+
     while True:
-        out = ws.recv()
-        if isinstance(out, str):
-            message = json.loads(out)
-            if message['type'] == 'executing':
-                data = message['data']
-                if data['node'] is None and data['prompt_id'] == prompt_id:
+        message = ws.recv()
+        if isinstance(message, str):
+            data = json.loads(message)
+            if data["type"] == "executing":
+                if data["data"]["node"] is None and data["data"]["prompt_id"] == prompt_id:
                     break
-        else:
-            continue
 
     history = get_history(prompt_id)[prompt_id]
-    for node_id in history['outputs']:
-        node_output = history['outputs'][node_id]
+
+    for node_id, node_output in history["outputs"].items():
         images_output = []
-        if 'images' in node_output:
-            for image in node_output['images']:
-                image_data = get_image(image['filename'], image['subfolder'], image['type'])
-                # bytes 객체를 base64로 인코딩하여 JSON 직렬화 가능하게 변환
-                if isinstance(image_data, bytes):
-                    import base64
-                    image_data = base64.b64encode(image_data).decode('utf-8')
-                images_output.append(image_data)
+        if "images" in node_output:
+            for image in node_output["images"]:
+                image_bytes = get_image(
+                    image["filename"],
+                    image["subfolder"],
+                    image["type"],
+                )
+                images_output.append(
+                    base64.b64encode(image_bytes).decode("utf-8")
+                )
         output_images[node_id] = images_output
 
     return output_images
 
+
 def get_workflow_from_input(job_input):
-    """Return a deep-copied workflow provided by the client."""
+    """
+    Return a deep-copied workflow provided by the client.
+    No modifications are applied.
+    """
     workflow_input = job_input.get("workflow")
     if workflow_input is None:
-        raise ValueError("Workflow data must be provided in the job input.")
+        raise ValueError("Workflow must be provided in job input")
 
     if isinstance(workflow_input, str):
         try:
-            workflow_data = json.loads(workflow_input)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Invalid workflow JSON string provided by client.") from exc
+            workflow = json.loads(workflow_input)
+        except json.JSONDecodeError as e:
+            raise ValueError("Invalid workflow JSON string") from e
     elif isinstance(workflow_input, dict):
-        workflow_data = workflow_input
+        workflow = workflow_input
     else:
-        raise ValueError("Workflow must be a JSON string or object.")
+        raise ValueError("Workflow must be a JSON object or string")
 
-    return copy.deepcopy(workflow_data)
+    return copy.deepcopy(workflow)
+
+
+# ================== HANDLER ==================
 
 def handler(job):
     job_input = job.get("input", {})
+    logger.info("Received job input")
 
-    logger.info(f"Received job input: {job_input}")
     task_id = f"task_{uuid.uuid4()}"
 
-    image_input = job_input["image_path"]
-    # 헬퍼 함수를 사용해 이미지 파일 경로 확보 (Base64 또는 Path)
-    # 이미지 확장자를 알 수 없으므로 .jpg로 가정하거나, 입력에서 받아야 합니다.
-    if image_input == "/example_image.png":
-        image_path = "/example_image.png"
-    else:
-        image_path = save_data_if_base64(image_input, task_id, "input_image.jpg")
-    
+    # Image is ALWAYS provided as base64
+    image_base64 = job_input.get("image_path")
+    if not image_base64:
+        return {"error": "image_path (base64) is required"}
+
+    image_path = save_base64_image(
+        image_base64,
+        temp_dir=task_id,
+        filename="input_image.png",
+    )
 
     try:
-        prompt = get_workflow_from_input(job_input)
-    except ValueError as workflow_error:
-        logger.error(str(workflow_error))
-        return {"error": str(workflow_error)}
+        workflow = get_workflow_from_input(job_input)
+    except ValueError as e:
+        logger.error(str(e))
+        return {"error": str(e)}
 
-    prompt["41"]["inputs"]["image"] = image_path
-    prompt["6"]["inputs"]["text"] = job_input["prompt"]
-    prompt["25"]["inputs"]["noise_seed"] = job_input["seed"]
-    prompt["26"]["inputs"]["guidance"] = job_input["guidance"]
-    prompt["27"]["inputs"]["width"] = job_input["width"]
-    prompt["27"]["inputs"]["height"] = job_input["height"]
-    prompt["30"]["inputs"]["width"] = job_input["width"]
-    prompt["30"]["inputs"]["height"] = job_input["height"]
+    # NOTE:
+    # The workflow is used AS-IS.
+    # No node overrides, no parameter patching.
 
     ws_url = f"ws://{server_address}:8188/ws?clientId={client_id}"
     logger.info(f"Connecting to WebSocket: {ws_url}")
-    
-    # 먼저 HTTP 연결이 가능한지 확인
+
+    # Wait until ComfyUI HTTP endpoint is ready
     http_url = f"http://{server_address}:8188/"
-    logger.info(f"Checking HTTP connection to: {http_url}")
-    
-    # HTTP 연결 확인 (최대 1분)
-    max_http_attempts = 180
-    for http_attempt in range(max_http_attempts):
+    for _ in range(180):
         try:
-            import urllib.request
-            response = urllib.request.urlopen(http_url, timeout=5)
-            logger.info(f"HTTP 연결 성공 (시도 {http_attempt+1})")
+            urllib.request.urlopen(http_url, timeout=5)
             break
-        except Exception as e:
-            logger.warning(f"HTTP 연결 실패 (시도 {http_attempt+1}/{max_http_attempts}): {e}")
-            if http_attempt == max_http_attempts - 1:
-                raise Exception("ComfyUI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
+        except Exception:
             time.sleep(1)
-    
+    else:
+        return {"error": "ComfyUI server is not reachable"}
+
     ws = websocket.WebSocket()
-    # 웹소켓 연결 시도 (최대 3분)
-    max_attempts = int(180/5)  # 3분 (1초에 한 번씩 시도)
-    for attempt in range(max_attempts):
-        import time
-        try:
-            ws.connect(ws_url)
-            logger.info(f"웹소켓 연결 성공 (시도 {attempt+1})")
-            break
-        except Exception as e:
-            logger.warning(f"웹소켓 연결 실패 (시도 {attempt+1}/{max_attempts}): {e}")
-            if attempt == max_attempts - 1:
-                raise Exception("웹소켓 연결 시간 초과 (3분)")
-            time.sleep(5)
-    images = get_images(ws, prompt)
+    ws.connect(ws_url)
+
+    images = get_images(ws, workflow)
     ws.close()
 
-    # 이미지가 없는 경우 처리
     if not images:
-        return {"error": "이미지를 생성할 수 없습니다."}
-    
-    # 첫 번째 이미지 반환
+        return {"error": "No images generated"}
+
     for node_id in images:
         if images[node_id]:
             return {"image": images[node_id][0]}
-    
-    return {"error": "이미지를 찾을 수 없습니다."}
+
+    return {"error": "Image output not found"}
+
+
+# ================== START ==================
 
 runpod.serverless.start({"handler": handler})
