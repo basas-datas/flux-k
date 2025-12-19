@@ -1,10 +1,9 @@
-import copy
 import os
-import base64
-import binascii
 import json
-import logging
 import uuid
+import base64
+import logging
+import time
 import urllib.request
 import urllib.parse
 import websocket
@@ -17,64 +16,63 @@ logger = logging.getLogger(__name__)
 
 # ================== CUDA CHECK ==================
 
-def check_cuda_availability():
-    """Check CUDA availability and configure environment."""
+def check_cuda():
     try:
         import torch
-        if torch.cuda.is_available():
-            logger.info("✅ CUDA is available and working")
-            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-            return True
-        else:
-            logger.error("❌ CUDA is not available")
-            raise RuntimeError("CUDA is required but not available")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available")
+        logger.info("✅ CUDA available")
     except Exception as e:
-        logger.error(f"❌ CUDA check failed: {e}")
-        raise RuntimeError(f"CUDA initialization failed: {e}")
+        logger.error(f"❌ CUDA error: {e}")
+        raise
 
-try:
-    check_cuda_availability()
-except Exception as e:
-    logger.error(f"Fatal error: {e}")
-    exit(1)
+check_cuda()
 
 # ================== GLOBALS ==================
 
-server_address = os.getenv("SERVER_ADDRESS", "127.0.0.1")
-client_id = str(uuid.uuid4())
+SERVER_ADDRESS = os.getenv("SERVER_ADDRESS", "127.0.0.1")
+CLIENT_ID = str(uuid.uuid4())
 
-# ComfyUI input directory (IMPORTANT)
 COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
 
-# ================== HELPERS ==================
+# ================== COMFY HELPERS ==================
 
-def save_base64_image_to_comfyui(data_base64: str, filename: str) -> str:
-    """
-    Decode a base64 image and save it into ComfyUI/input.
-    This is required for LoadImage node to work.
-    """
-    try:
-        decoded = base64.b64decode(data_base64)
-        os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
-        file_path = os.path.join(COMFY_INPUT_DIR, filename)
-        with open(file_path, "wb") as f:
-            f.write(decoded)
-        logger.info(f"Saved image to ComfyUI input: {file_path}")
-        return file_path
-    except (binascii.Error, ValueError) as e:
-        raise ValueError("Invalid base64 image input") from e
+def wait_for_comfyui(timeout=180):
+    url = f"http://{SERVER_ADDRESS}:8188/"
+    for i in range(timeout):
+        try:
+            urllib.request.urlopen(url, timeout=3)
+            logger.info("✅ ComfyUI HTTP ready")
+            return
+        except Exception:
+            time.sleep(1)
+    raise RuntimeError("ComfyUI not reachable")
+
+
+def save_base64_image(image_b64: str):
+    os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
+    path = os.path.join(COMFY_INPUT_DIR, "input_image.png")
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(image_b64))
+    logger.info(f"🖼 Saved image: {path}")
 
 
 def queue_prompt(prompt):
-    url = f"http://{server_address}:8188/prompt"
-    payload = {"prompt": prompt, "client_id": client_id}
+    url = f"http://{SERVER_ADDRESS}:8188/prompt"
+    payload = {"prompt": prompt, "client_id": CLIENT_ID}
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data)
     return json.loads(urllib.request.urlopen(req).read())
 
 
+def get_history(prompt_id):
+    url = f"http://{SERVER_ADDRESS}:8188/history/{prompt_id}"
+    with urllib.request.urlopen(url) as response:
+        return json.loads(response.read())
+
+
 def get_image(filename, subfolder, folder_type):
-    url = f"http://{server_address}:8188/view"
+    url = f"http://{SERVER_ADDRESS}:8188/view"
     params = {
         "filename": filename,
         "subfolder": subfolder,
@@ -85,16 +83,11 @@ def get_image(filename, subfolder, folder_type):
         return response.read()
 
 
-def get_history(prompt_id):
-    url = f"http://{server_address}:8188/history/{prompt_id}"
-    with urllib.request.urlopen(url) as response:
-        return json.loads(response.read())
+def get_images(ws, workflow):
+    prompt_id = queue_prompt(workflow)["prompt_id"]
+    logger.info(f"🚀 prompt_id = {prompt_id}")
 
-
-def get_images(ws, prompt):
-    prompt_id = queue_prompt(prompt)["prompt_id"]
-    output_images = {}
-
+    # wait execution end
     while True:
         msg = ws.recv()
         if isinstance(msg, str):
@@ -104,97 +97,62 @@ def get_images(ws, prompt):
                     break
 
     history = get_history(prompt_id)[prompt_id]
+    outputs = {}
 
     for node_id, node_output in history["outputs"].items():
-        images_output = []
+        images = []
         if "images" in node_output:
-            for image in node_output["images"]:
-                image_bytes = get_image(
-                    image["filename"],
-                    image["subfolder"],
-                    image["type"],
+            for img in node_output["images"]:
+                raw = get_image(
+                    img["filename"],
+                    img["subfolder"],
+                    img["type"],
                 )
-                images_output.append(
-                    base64.b64encode(image_bytes).decode("utf-8")
-                )
-        output_images[node_id] = images_output
+                images.append(base64.b64encode(raw).decode("utf-8"))
+        outputs[node_id] = images
 
-    return output_images
-
-
-def get_workflow_from_input(job_input):
-    """
-    Return a deep-copied workflow provided by the client.
-    No modifications are applied.
-    """
-    workflow_input = job_input.get("workflow")
-    if workflow_input is None:
-        raise ValueError("Workflow must be provided in job input")
-
-    if isinstance(workflow_input, str):
-        workflow = json.loads(workflow_input)
-    elif isinstance(workflow_input, dict):
-        workflow = workflow_input
-    else:
-        raise ValueError("Workflow must be a JSON object or string")
-
-    return copy.deepcopy(workflow)
+    return outputs
 
 # ================== HANDLER ==================
 
 def handler(job):
     job_input = job.get("input", {})
-    logger.info("Received job input")
+    logger.info("📥 Job received")
 
-    # Image is ALWAYS base64
-    image_base64 = job_input.get("image_path")
-    if not image_base64:
-        return {"error": "image_path (base64) is required"}
+    # 1. validate input
+    image_b64 = job_input.get("image_path")
+    workflow = job_input.get("workflow")
 
-    # Save image directly into ComfyUI/input
-    save_base64_image_to_comfyui(
-        image_base64,
-        filename="input_image.png"
-    )
+    if not image_b64:
+        return {"error": "image_path is required"}
+    if not workflow:
+        return {"error": "workflow is required"}
+
+    # 2. save image for LoadImage
+    save_base64_image(image_b64)
+
+    # debug check (optional but useful)
+    logger.info(f"📂 ComfyUI input files: {os.listdir(COMFY_INPUT_DIR)}")
+
+    # 3. wait ComfyUI
+    wait_for_comfyui()
+
+    # 4. websocket
+    ws = websocket.WebSocket()
+    ws.connect(f"ws://{SERVER_ADDRESS}:8188/ws?clientId={CLIENT_ID}")
 
     try:
-        workflow = get_workflow_from_input(job_input)
-    except Exception as e:
-        logger.error(str(e))
-        return {"error": str(e)}
+        images = get_images(ws, workflow)
+    finally:
+        ws.close()
 
-    # NOTE:
-    # Workflow is used AS-IS.
-    # No node overrides, no parameter patching.
-
-    ws_url = f"ws://{server_address}:8188/ws?clientId={client_id}"
-
-    # Wait for ComfyUI HTTP to be ready
-    http_url = f"http://{server_address}:8188/"
-    for _ in range(180):
-        try:
-            urllib.request.urlopen(http_url, timeout=5)
-            break
-        except Exception:
-            import time
-            time.sleep(1)
-    else:
-        return {"error": "ComfyUI server is not reachable"}
-
-    ws = websocket.WebSocket()
-    ws.connect(ws_url)
-
-    images = get_images(ws, workflow)
-    ws.close()
-
-    if not images:
-        return {"error": "No images generated"}
-
+    # 5. return first image
     for node_id in images:
         if images[node_id]:
+            logger.info("✅ Image generated")
             return {"image": images[node_id][0]}
 
-    return {"error": "Image output not found"}
+    return {"error": "No image output"}
 
 # ================== START ==================
 
