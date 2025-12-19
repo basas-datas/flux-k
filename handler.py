@@ -9,14 +9,11 @@ import urllib.request
 import urllib.parse
 import websocket
 import runpod
-from runpod.serverless.utils import rp_upload
-
 
 # ================== LOGGING ==================
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 # ================== CUDA CHECK ==================
 
@@ -35,37 +32,34 @@ def check_cuda_availability():
         logger.error(f"❌ CUDA check failed: {e}")
         raise RuntimeError(f"CUDA initialization failed: {e}")
 
-
 try:
-    cuda_available = check_cuda_availability()
-    if not cuda_available:
-        raise RuntimeError("CUDA is not available")
+    check_cuda_availability()
 except Exception as e:
     logger.error(f"Fatal error: {e}")
-    logger.error("Exiting due to CUDA requirements not met")
     exit(1)
-
 
 # ================== GLOBALS ==================
 
 server_address = os.getenv("SERVER_ADDRESS", "127.0.0.1")
 client_id = str(uuid.uuid4())
 
+# ComfyUI input directory (IMPORTANT)
+COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
 
 # ================== HELPERS ==================
 
-def save_base64_image(data_base64: str, temp_dir: str, filename: str) -> str:
+def save_base64_image_to_comfyui(data_base64: str, filename: str) -> str:
     """
-    Decode a base64 image string and save it to disk.
-    Returns the absolute file path.
+    Decode a base64 image and save it into ComfyUI/input.
+    This is required for LoadImage node to work.
     """
     try:
         decoded = base64.b64decode(data_base64)
-        os.makedirs(temp_dir, exist_ok=True)
-        file_path = os.path.abspath(os.path.join(temp_dir, filename))
+        os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
+        file_path = os.path.join(COMFY_INPUT_DIR, filename)
         with open(file_path, "wb") as f:
             f.write(decoded)
-        logger.info(f"Saved base64 image to: {file_path}")
+        logger.info(f"Saved image to ComfyUI input: {file_path}")
         return file_path
     except (binascii.Error, ValueError) as e:
         raise ValueError("Invalid base64 image input") from e
@@ -73,7 +67,6 @@ def save_base64_image(data_base64: str, temp_dir: str, filename: str) -> str:
 
 def queue_prompt(prompt):
     url = f"http://{server_address}:8188/prompt"
-    logger.info(f"Queueing prompt to: {url}")
     payload = {"prompt": prompt, "client_id": client_id}
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data)
@@ -82,7 +75,6 @@ def queue_prompt(prompt):
 
 def get_image(filename, subfolder, folder_type):
     url = f"http://{server_address}:8188/view"
-    logger.info(f"Fetching image from: {url}")
     params = {
         "filename": filename,
         "subfolder": subfolder,
@@ -95,7 +87,6 @@ def get_image(filename, subfolder, folder_type):
 
 def get_history(prompt_id):
     url = f"http://{server_address}:8188/history/{prompt_id}"
-    logger.info(f"Fetching history from: {url}")
     with urllib.request.urlopen(url) as response:
         return json.loads(response.read())
 
@@ -105,9 +96,9 @@ def get_images(ws, prompt):
     output_images = {}
 
     while True:
-        message = ws.recv()
-        if isinstance(message, str):
-            data = json.loads(message)
+        msg = ws.recv()
+        if isinstance(msg, str):
+            data = json.loads(msg)
             if data["type"] == "executing":
                 if data["data"]["node"] is None and data["data"]["prompt_id"] == prompt_id:
                     break
@@ -141,10 +132,7 @@ def get_workflow_from_input(job_input):
         raise ValueError("Workflow must be provided in job input")
 
     if isinstance(workflow_input, str):
-        try:
-            workflow = json.loads(workflow_input)
-        except json.JSONDecodeError as e:
-            raise ValueError("Invalid workflow JSON string") from e
+        workflow = json.loads(workflow_input)
     elif isinstance(workflow_input, dict):
         workflow = workflow_input
     else:
@@ -152,46 +140,43 @@ def get_workflow_from_input(job_input):
 
     return copy.deepcopy(workflow)
 
-
 # ================== HANDLER ==================
 
 def handler(job):
     job_input = job.get("input", {})
     logger.info("Received job input")
 
-    task_id = f"task_{uuid.uuid4()}"
-
-    # Image is ALWAYS provided as base64
+    # Image is ALWAYS base64
     image_base64 = job_input.get("image_path")
     if not image_base64:
         return {"error": "image_path (base64) is required"}
 
-    image_path = save_base64_image(
+    # Save image directly into ComfyUI/input
+    save_base64_image_to_comfyui(
         image_base64,
-        temp_dir=task_id,
-        filename="input_image.png",
+        filename="input_image.png"
     )
 
     try:
         workflow = get_workflow_from_input(job_input)
-    except ValueError as e:
+    except Exception as e:
         logger.error(str(e))
         return {"error": str(e)}
 
     # NOTE:
-    # The workflow is used AS-IS.
+    # Workflow is used AS-IS.
     # No node overrides, no parameter patching.
 
     ws_url = f"ws://{server_address}:8188/ws?clientId={client_id}"
-    logger.info(f"Connecting to WebSocket: {ws_url}")
 
-    # Wait until ComfyUI HTTP endpoint is ready
+    # Wait for ComfyUI HTTP to be ready
     http_url = f"http://{server_address}:8188/"
     for _ in range(180):
         try:
             urllib.request.urlopen(http_url, timeout=5)
             break
         except Exception:
+            import time
             time.sleep(1)
     else:
         return {"error": "ComfyUI server is not reachable"}
@@ -210,7 +195,6 @@ def handler(job):
             return {"image": images[node_id][0]}
 
     return {"error": "Image output not found"}
-
 
 # ================== START ==================
 
