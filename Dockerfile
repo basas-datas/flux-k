@@ -29,7 +29,3 @@ COPY . .
 RUN chmod +x /entrypoint.sh
 
 CMD ["/entrypoint.sh"]
-
-# Для локального запуска в обычном pod
-# (серверлесс не сломается, если CMD не трогать)
-COPY launch_pod.py /launch_pod.py
