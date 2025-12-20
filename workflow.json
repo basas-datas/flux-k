@@ -50,7 +50,7 @@
     "class_type": "ImageStitch",
     "inputs": {
       "direction": "right",
-      "match_image_size": True,
+      "match_image_size": true,
       "spacing_width": 0,
       "spacing_color": "white",
       "image1": ["1", 0]
