@@ -24,6 +24,11 @@ CLIENT_ID = str(uuid.uuid4())
 
 COMFY_INPUT_DIR = "/workspace/ComfyUI/input"
 
+DEFAULT_WORKFLOW_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "workflow.json"
+)
+
 # ================== COMFY HELPERS ==================
 
 def wait_for_comfyui(timeout=180):
@@ -35,50 +40,78 @@ def wait_for_comfyui(timeout=180):
             return
         except Exception:
             time.sleep(1)
-    raise RuntimeError("ComfyUI not reachable")
+    raise RuntimeError("ComfyUI is not reachable.")
 
+# ================== WORKFLOW ==================
 
-def save_image_as_rgb_jpeg(data_input, output_filename="input_image.jpg"):
+def load_workflow(client_workflow=None):
+    if client_workflow:
+        logger.info("🧩 Using client-provided workflow")
+        return client_workflow
 
-    os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
-    out_path = os.path.join(COMFY_INPUT_DIR, output_filename)
+    logger.info("🧩 Using default workflow.json")
+    try:
+        with open(DEFAULT_WORKFLOW_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to load default workflow.json."
+        ) from e
 
-    # 1. получить байты изображения
-    if isinstance(data_input, str) and os.path.exists(data_input):
-        logger.info(f"📁 Image path provided: {data_input}")
-        with open(data_input, "rb") as f:
-            raw_bytes = f.read()
-    else:
+# ================== IMAGE LOADING ==================
+
+def load_image_bytes(image_url=None, image_base64=None):
+    if image_url:
+        logger.info(f"🌐 Downloading image from URL: {image_url}")
         try:
-            if "," in data_input:
-                data_input = data_input.split(",", 1)[1]
-            raw_bytes = base64.b64decode(data_input, validate=True)
-        except (binascii.Error, ValueError) as e:
-            raise RuntimeError("Invalid image_path: not valid base64 or path") from e
+            with urllib.request.urlopen(image_url, timeout=15) as response:
+                return response.read()
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to download image from 'image_url'. "
+                "Make sure the URL is publicly accessible."
+            ) from e
 
-    # 2. открыть через PIL (КРИТИЧЕСКИ ВАЖНО)
+    if image_base64:
+        try:
+            if "," in image_base64:
+                image_base64 = image_base64.split(",", 1)[1]
+            return base64.b64decode(image_base64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise RuntimeError(
+                "Invalid 'image_base64'. The value must be valid base64-encoded image data."
+            ) from e
+
+    raise RuntimeError("No image source provided.")
+
+def save_image_bytes_as_rgb_jpeg(raw_bytes):
+    os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
+
+    filename = f"input_{uuid.uuid4().hex}.jpg"
+    out_path = os.path.join(COMFY_INPUT_DIR, filename)
+
     try:
         img = Image.open(BytesIO(raw_bytes))
         img.load()
     except Exception as e:
-        raise RuntimeError("PIL failed to open input image") from e
+        raise RuntimeError(
+            "Uploaded image is not a valid or supported image file."
+        ) from e
 
-    # 3. привести к RGB (убирает alpha, palette, CMYK и т.д.)
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # 4. сохранить как JPEG
     img.save(
         out_path,
         format="JPEG",
         quality=100,
-        subsampling=0,
-        optimize=False
+        subsampling=0
     )
 
-    logger.info(f"🖼 Image normalized and saved as JPEG: {out_path}")
-    return out_path
+    logger.info(f"🖼 Image normalized and saved: {out_path}")
+    return filename  # IMPORTANT: return filename, not full path
 
+# ================== COMFY API ==================
 
 def queue_prompt(prompt):
     url = f"http://{SERVER_ADDRESS}:8188/prompt"
@@ -87,12 +120,10 @@ def queue_prompt(prompt):
     req = urllib.request.Request(url, data=data)
     return json.loads(urllib.request.urlopen(req).read())
 
-
 def get_history(prompt_id):
     url = f"http://{SERVER_ADDRESS}:8188/history/{prompt_id}"
     with urllib.request.urlopen(url) as response:
         return json.loads(response.read())
-
 
 def get_image(filename, subfolder, folder_type):
     url = f"http://{SERVER_ADDRESS}:8188/view"
@@ -104,7 +135,6 @@ def get_image(filename, subfolder, folder_type):
     query = urllib.parse.urlencode(params)
     with urllib.request.urlopen(f"{url}?{query}") as response:
         return response.read()
-
 
 def get_images(ws, workflow):
     prompt_id = queue_prompt(workflow)["prompt_id"]
@@ -139,23 +169,34 @@ def get_images(ws, workflow):
 
 def handler(job):
     job_input = job.get("input", {})
-    logger.info("📥 Job HUY TEST received")
+    logger.info("📥 Job received")
 
-    image_input = job_input.get("image_path")
-    workflow = job_input.get("workflow")
+    image_url = job_input.get("image_url")
+    image_base64 = job_input.get("image_base64")
+    client_workflow = job_input.get("workflow")
 
-    if not image_input:
-        return {"error": "image_path is required"}
-    if not workflow:
-        return {"error": "workflow is required"}
+    if not image_url and not image_base64:
+        return {
+            "error": "Either 'image_url' or 'image_base64' must be provided."
+        }
 
-    # 🔥 КЛЮЧЕВОЙ ШАГ
-    image_path = save_image_as_rgb_jpeg(image_input)
+    if image_url and image_base64:
+        return {
+            "error": "Provide only one image source: 'image_url' or 'image_base64', not both."
+        }
 
-    # LoadImage ВСЕГДА получает путь
-    workflow["1"]["inputs"]["image"] = image_path
+    try:
+        workflow = load_workflow(client_workflow)
+        raw_bytes = load_image_bytes(
+            image_url=image_url,
+            image_base64=image_base64
+        )
+        filename = save_image_bytes_as_rgb_jpeg(raw_bytes)
+    except RuntimeError as e:
+        return {"error": str(e)}
 
-    logger.info(f"📂 HUY TEST input files: {os.listdir(COMFY_INPUT_DIR)}")
+    # LoadImage node
+    workflow["1"]["inputs"]["image"] = filename
 
     wait_for_comfyui()
 
@@ -172,7 +213,9 @@ def handler(job):
             logger.info("✅ Image generated")
             return {"image": images[node_id][0]}
 
-    return {"error": "No image output"}
+    return {
+        "error": "Workflow finished successfully but produced no images."
+    }
 
 # ================== START ==================
 
