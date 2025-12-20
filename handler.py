@@ -21,7 +21,7 @@ DEV = os.getenv("DEV", "UNSET")
 TEST = os.getenv("TEST", "UNSET")
 
 logger.info("=" * 80)
-logger.info("🚀🚀🚀  STARTING HANDLER = >>> 16 <<<")
+logger.info("🚀🚀🚀  STARTING HANDLER = >>> 17 <<<")
 logger.info(f"🔥🔥🔥  DEV  = >>> {DEV} <<<")
 logger.info(f"🔥🔥🔥  TEST = >>> {TEST} <<<")
 logger.info("=" * 80)
