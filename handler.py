@@ -16,6 +16,13 @@ from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+DEV = os.getenv("DEV", "UNSET")
+TEST = os.getenv("TEST", "UNSET")
+logger.info("=" * 80)
+logger.info("🚀🚀🚀  STARTING HANDLER")
+logger.info(f"🔥🔥🔥  DEV  = >>> {DEV} <<<")
+logger.info(f"🔥🔥🔥  TEST = >>> {TEST} <<<")
+logger.info("=" * 80)
 
 # ================== GLOBALS ==================
 
