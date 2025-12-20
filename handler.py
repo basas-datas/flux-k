@@ -54,9 +54,7 @@ def load_workflow(client_workflow=None):
         with open(DEFAULT_WORKFLOW_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        raise RuntimeError(
-            "Failed to load default workflow.json."
-        ) from e
+        raise RuntimeError("Failed to load default workflow.json.") from e
 
 # ================== IMAGE LOADING ==================
 
@@ -84,10 +82,10 @@ def load_image_bytes(image_url=None, image_base64=None):
 
     raise RuntimeError("No image source provided.")
 
-def save_image_bytes_as_rgb_jpeg(raw_bytes):
+def save_image_bytes_as_png(raw_bytes):
     os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
-    filename = f"input_{uuid.uuid4().hex}.jpg"
+    filename = f"input_{uuid.uuid4().hex}.png"
     out_path = os.path.join(COMFY_INPUT_DIR, filename)
 
     try:
@@ -98,27 +96,52 @@ def save_image_bytes_as_rgb_jpeg(raw_bytes):
             "Uploaded image is not a valid or supported image file."
         ) from e
 
-    if img.mode != "RGB":
-        img = img.convert("RGB")
+    # Приводим к RGB / RGBA
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA")
+
+    # Убираем alpha (LoadImage стабильнее без него)
+    if img.mode == "RGBA":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
 
     img.save(
         out_path,
-        format="JPEG",
-        quality=100,
-        subsampling=0
+        format="PNG",
+        optimize=False
     )
 
-    logger.info(f"🖼 Image normalized and saved: {out_path}")
-    return filename  # IMPORTANT: return filename, not full path
+    if os.path.getsize(out_path) < 100:
+        raise RuntimeError("Saved image file is unexpectedly small.")
+
+    logger.info(f"🖼 Image normalized and saved as PNG: {out_path}")
+    return filename  # IMPORTANT: filename only
 
 # ================== COMFY API ==================
 
 def queue_prompt(prompt):
     url = f"http://{SERVER_ADDRESS}:8188/prompt"
-    payload = {"prompt": prompt, "client_id": CLIENT_ID}
+    payload = {
+        "prompt": prompt,
+        "client_id": CLIENT_ID
+    }
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data)
-    return json.loads(urllib.request.urlopen(req).read())
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"}
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")
+        logger.error("❌ ComfyUI rejected prompt")
+        logger.error(body)
+        raise
 
 def get_history(prompt_id):
     url = f"http://{SERVER_ADDRESS}:8188/history/{prompt_id}"
@@ -191,7 +214,7 @@ def handler(job):
             image_url=image_url,
             image_base64=image_base64
         )
-        filename = save_image_bytes_as_rgb_jpeg(raw_bytes)
+        filename = save_image_bytes_as_png(raw_bytes)
     except RuntimeError as e:
         return {"error": str(e)}
 
