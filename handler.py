@@ -16,8 +16,10 @@ from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 DEV = os.getenv("DEV", "UNSET")
 TEST = os.getenv("TEST", "UNSET")
+
 logger.info("=" * 80)
 logger.info("🚀🚀🚀  STARTING HANDLER")
 logger.info(f"🔥🔥🔥  DEV  = >>> {DEV} <<<")
@@ -111,7 +113,6 @@ def save_image_bytes_as_jpeg(raw_bytes):
 
     logger.info(f"🖼 Image overwritten: {out_path}")
     return filename
-
 
 # ================== COMFY API ==================
 
@@ -209,7 +210,7 @@ def handler(job):
             image_url=image_url,
             image_base64=image_base64
         )
-        filename = save_image_bytes_as_png(raw_bytes)
+        filename = save_image_bytes_as_jpeg(raw_bytes)
     except RuntimeError as e:
         return {"error": str(e)}
 
