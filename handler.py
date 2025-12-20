@@ -85,38 +85,24 @@ def load_image_bytes(image_url=None, image_base64=None):
 def save_image_bytes_as_png(raw_bytes):
     os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
-    filename = f"input_{uuid.uuid4().hex}.png"
+    filename = "input_image.png"
     out_path = os.path.join(COMFY_INPUT_DIR, filename)
 
-    try:
-        img = Image.open(BytesIO(raw_bytes))
-        img.load()
-    except Exception as e:
-        raise RuntimeError(
-            "Uploaded image is not a valid or supported image file."
-        ) from e
+    img = Image.open(BytesIO(raw_bytes))
+    img.load()
 
-    # Приводим к RGB / RGBA
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGBA")
 
-    # Убираем alpha (LoadImage стабильнее без него)
     if img.mode == "RGBA":
         bg = Image.new("RGB", img.size, (255, 255, 255))
         bg.paste(img, mask=img.split()[-1])
         img = bg
 
-    img.save(
-        out_path,
-        format="PNG",
-        optimize=False
-    )
+    img.save(out_path, format="PNG", optimize=False)
 
-    if os.path.getsize(out_path) < 100:
-        raise RuntimeError("Saved image file is unexpectedly small.")
-
-    logger.info(f"🖼 Image normalized and saved as PNG: {out_path}")
-    return filename  # IMPORTANT: filename only
+    logger.info(f"🖼 Image overwritten: {out_path}")
+    return filename
 
 # ================== COMFY API ==================
 
