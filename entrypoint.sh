@@ -87,38 +87,30 @@ fi
 echo "Starting the handler..."
 
 if [ "$DEV" = "true" ]; then
-    echo "🔥 DEV MODE ENABLED → syncing code from GitHub"
+    echo "🔥 DEV MODE ENABLED → downloading handler.py and workflow.json"
 
-    REPO_URL="https://github.com/basas-datas/flux-k.git"
-    RAW_HANDLER_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/handler.py"
+    HANDLER_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/handler.py"
+    WORKFLOW_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/workflow.json"
 
-    GIT_OK=true
-
-    if [ -d .git ]; then
-        echo "Git repository detected"
-
-        git remote set-url origin "$REPO_URL" || GIT_OK=false
-
-        if [ "$GIT_OK" = "true" ]; then
-            git fetch origin || GIT_OK=false
-            git reset --hard origin/main || GIT_OK=false
-            git clean -fd || GIT_OK=false
-        fi
+    # ---- handler.py ----
+    if curl -fsSL "$HANDLER_URL" -o handler.py.tmp; then
+        mv handler.py.tmp handler.py
+        echo "✅ handler.py updated"
     else
-        echo "No git repo found → cloning"
-        git clone "$REPO_URL" . || GIT_OK=false
+        echo "⚠️ Failed to download handler.py → using existing one"
+        rm -f handler.py.tmp
     fi
 
-    if [ "$GIT_OK" != "true" ]; then
-        echo "⚠️ Git sync failed → falling back to raw handler.py download"
-
-        curl -fsSL "$RAW_HANDLER_URL" -o handler.py || {
-            echo "❌ Fallback failed: could not download handler.py"
-            echo "Continuing with existing handler.py"
-        }
+    # ---- workflow.json ----
+    if curl -fsSL "$WORKFLOW_URL" -o workflow.json.tmp; then
+        mv workflow.json.tmp workflow.json
+        echo "✅ workflow.json updated"
+    else
+        echo "⚠️ Failed to download workflow.json → using existing one"
+        rm -f workflow.json.tmp
     fi
 else
-    echo "🚀 PROD MODE → using baked-in code"
+    echo "🚀 PROD MODE → using baked-in files"
 fi
 
 exec python handler.py
