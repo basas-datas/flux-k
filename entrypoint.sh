@@ -87,31 +87,32 @@ fi
 echo "Starting the handler..."
 
 if [ "$DEV" = "true" ]; then
-    echo "🔥 DEV MODE ENABLED → syncing code from GitHub"
+    echo "🔥 DEV MODE ENABLED → downloading handler.py and workflow.json"
 
-    REPO_URL="https://github.com/basas-datas/flux-k.git"
+    HANDLER_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/handler.py"
+    WORKFLOW_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/workflow.json"
 
-    if [ -d .git ]; then
-        echo "Git repository detected"
-
-        # гарантируем корректный origin
-        git remote set-url origin "$REPO_URL" || true
-
-        # жёстко синхронизируемся с origin
-        git fetch origin || true
-        git reset --hard origin/main || true
-        git clean -fd || true
+    # ---- handler.py ----
+    if curl -fsSL "$HANDLER_URL" -o handler.py.tmp; then
+        mv handler.py.tmp handler.py
+        echo "✅ handler.py updated"
     else
-        echo "No git repo found → cloning"
+        echo "⚠️ Failed to download handler.py → using existing one"
+        rm -f handler.py.tmp
+    fi
 
-        # пробуем клонировать поверх
-        git clone "$REPO_URL" . || {
-            echo "Clone failed, continuing with existing files"
-        }
+    # ---- workflow.json ----
+    if curl -fsSL "$WORKFLOW_URL" -o workflow.json.tmp; then
+        mv workflow.json.tmp workflow.json
+        echo "✅ workflow.json updated"
+    else
+        echo "⚠️ Failed to download workflow.json → using existing one"
+        rm -f workflow.json.tmp
     fi
 else
-    echo "🚀 PROD MODE → using baked-in code"
+    echo "🚀 PROD MODE → using baked-in files"
 fi
 
 exec python handler.py
+
 
