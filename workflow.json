@@ -1,0 +1,122 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input_image.jpg"
+    }
+  },
+
+  "10": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
+  },
+
+  "11": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp16.safetensors",
+      "type": "flux",
+      "device": "default"
+    }
+  },
+
+  "12": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "Remove watermarks, logos, captions, labels, texts, banners and text plates, subtitles and inscriptions from the image. Fill the removed areas naturally using surrounding colors and textures. Maintain the original composition, lighting, colors, and image style exactly unchanged. Do not add any new elements.",
+      "clip": ["11", 0]
+    }
+  },
+
+  "135": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["6", 0]
+    }
+  },
+
+  "146": {
+    "class_type": "ImageStitch",
+    "inputs": {
+      "direction": "right",
+      "match_image_size": True,
+      "spacing_width": 0,
+      "spacing_color": "white",
+      "image1": ["1", 0]
+    }
+  },
+
+  "42": {
+    "class_type": "FluxKontextImageScale",
+    "inputs": {
+      "image": ["146", 0]
+    }
+  },
+
+  "124": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["42", 0],
+      "vae": ["10", 0]
+    }
+  },
+
+  "177": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["6", 0],
+      "latent": ["124", 0]
+    }
+  },
+
+  "35": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "guidance": 1.2,
+      "conditioning": ["177", 0]
+    }
+  },
+
+  "31": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 2,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": ["12", 0],
+      "positive": ["35", 0],
+      "negative": ["135", 0],
+      "latent_image": ["124", 0]
+    }
+  },
+
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["31", 0],
+      "vae": ["10", 0]
+    }
+  },
+
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "flux_kontext_text_removed"
+    }
+  }
+}
