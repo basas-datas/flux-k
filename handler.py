@@ -21,7 +21,7 @@ DEV = os.getenv("DEV", "UNSET")
 TEST = os.getenv("TEST", "UNSET")
 
 logger.info("=" * 80)
-logger.info("🚀🚀🚀  STARTING HANDLER = >>> 17 <<<")
+logger.info("🚀🚀🚀  STARTING HANDLER = >>> 18 <<<")
 logger.info(f"🔥🔥🔥  DEV  = >>> {DEV} <<<")
 logger.info(f"🔥🔥🔥  TEST = >>> {TEST} <<<")
 logger.info("=" * 80)
@@ -92,13 +92,22 @@ def load_image_bytes(image_url=None, image_base64=None):
     raise RuntimeError("No image source provided.")
 
 def save_image_bytes_as_jpeg(raw_bytes):
+    """
+    IMPORTANT:
+    - Saves to a fixed filename (like the old working version).
+    - Returns ABSOLUTE PATH to the saved file, so LoadImage receives a full path.
+      This restores the behavior that worked before.
+    """
     os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
     filename = "input_image.jpg"
     out_path = os.path.join(COMFY_INPUT_DIR, filename)
 
-    img = Image.open(BytesIO(raw_bytes))
-    img.load()
+    try:
+        img = Image.open(BytesIO(raw_bytes))
+        img.load()
+    except Exception as e:
+        raise RuntimeError("Uploaded image is not a valid or supported image file.") from e
 
     if img.mode != "RGB":
         img = img.convert("RGB")
@@ -112,7 +121,7 @@ def save_image_bytes_as_jpeg(raw_bytes):
     )
 
     logger.info(f"🖼 Image overwritten: {out_path}")
-    return filename
+    return out_path  # <-- ABSOLUTE PATH (key change)
 
 # ================== COMFY API ==================
 
@@ -195,27 +204,23 @@ def handler(job):
     client_workflow = job_input.get("workflow")
 
     if not image_url and not image_base64:
-        return {
-            "error": "Either 'image_url' or 'image_base64' must be provided."
-        }
+        return {"error": "Either 'image_url' or 'image_base64' must be provided."}
 
     if image_url and image_base64:
-        return {
-            "error": "Provide only one image source: 'image_url' or 'image_base64', not both."
-        }
+        return {"error": "Provide only one image source: 'image_url' or 'image_base64', not both."}
 
     try:
         workflow = load_workflow(client_workflow)
-        raw_bytes = load_image_bytes(
-            image_url=image_url,
-            image_base64=image_base64
-        )
-        filename = save_image_bytes_as_jpeg(raw_bytes)
+        raw_bytes = load_image_bytes(image_url=image_url, image_base64=image_base64)
+
+        # ABSOLUTE PATH (restores old working behavior)
+        image_path = save_image_bytes_as_jpeg(raw_bytes)
+
     except RuntimeError as e:
         return {"error": str(e)}
 
-    # LoadImage node
-    workflow["1"]["inputs"]["image"] = filename
+    # LoadImage node gets ABSOLUTE PATH (key change)
+    workflow["1"]["inputs"]["image"] = image_path
 
     wait_for_comfyui()
 
@@ -232,9 +237,7 @@ def handler(job):
             logger.info("✅ Image generated")
             return {"image": images[node_id][0]}
 
-    return {
-        "error": "Workflow finished successfully but produced no images."
-    }
+    return {"error": "Workflow finished successfully but produced no images."}
 
 # ================== START ==================
 
