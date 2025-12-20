@@ -139,7 +139,7 @@ def get_images(ws, workflow):
 
 def handler(job):
     job_input = job.get("input", {})
-    logger.info("📥 Job received")
+    logger.info("📥 Job HUY TEST received")
 
     image_input = job_input.get("image_path")
     workflow = job_input.get("workflow")
@@ -155,7 +155,7 @@ def handler(job):
     # LoadImage ВСЕГДА получает путь
     workflow["1"]["inputs"]["image"] = image_path
 
-    logger.info(f"📂 ComfyUI input files: {os.listdir(COMFY_INPUT_DIR)}")
+    logger.info(f"📂 HUY TEST input files: {os.listdir(COMFY_INPUT_DIR)}")
 
     wait_for_comfyui()
 
