@@ -82,27 +82,29 @@ def load_image_bytes(image_url=None, image_base64=None):
 
     raise RuntimeError("No image source provided.")
 
-def save_image_bytes_as_png(raw_bytes):
+def save_image_bytes_as_jpeg(raw_bytes):
     os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
 
-    filename = "input_image.png"
+    filename = "input_image.jpg"
     out_path = os.path.join(COMFY_INPUT_DIR, filename)
 
     img = Image.open(BytesIO(raw_bytes))
     img.load()
 
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGBA")
+    if img.mode != "RGB":
+        img = img.convert("RGB")
 
-    if img.mode == "RGBA":
-        bg = Image.new("RGB", img.size, (255, 255, 255))
-        bg.paste(img, mask=img.split()[-1])
-        img = bg
-
-    img.save(out_path, format="PNG", optimize=False)
+    img.save(
+        out_path,
+        format="JPEG",
+        quality=100,
+        subsampling=0,
+        optimize=False
+    )
 
     logger.info(f"🖼 Image overwritten: {out_path}")
     return filename
+
 
 # ================== COMFY API ==================
 
