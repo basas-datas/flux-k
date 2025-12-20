@@ -84,9 +84,34 @@ if [ $wait_count -ge $max_wait ]; then
     exit 1
 fi
 
-# Start the handler in the foreground
-
-
-# 이 스크립트가 컨테이너의 메인 프로세스가 됩니다.
 echo "Starting the handler..."
+
+if [ "$DEV" = "true" ]; then
+    echo "🔥 DEV MODE ENABLED → syncing code from GitHub"
+
+    REPO_URL="https://github.com/basas-datas/flux-k.git"
+
+    if [ -d .git ]; then
+        echo "Git repository detected"
+
+        # гарантируем корректный origin
+        git remote set-url origin "$REPO_URL" || true
+
+        # жёстко синхронизируемся с origin
+        git fetch origin || true
+        git reset --hard origin/main || true
+        git clean -fd || true
+    else
+        echo "No git repo found → cloning"
+
+        # пробуем клонировать поверх
+        git clone "$REPO_URL" . || {
+            echo "Clone failed, continuing with existing files"
+        }
+    fi
+else
+    echo "🚀 PROD MODE → using baked-in code"
+fi
+
 exec python handler.py
+
