@@ -90,23 +90,31 @@ if [ "$DEV" = "true" ]; then
     echo "🔥 DEV MODE ENABLED → syncing code from GitHub"
 
     REPO_URL="https://github.com/basas-datas/flux-k.git"
+    RAW_HANDLER_URL="https://raw.githubusercontent.com/basas-datas/flux-k/main/handler.py"
+
+    GIT_OK=true
 
     if [ -d .git ]; then
         echo "Git repository detected"
 
-        # гарантируем корректный origin
-        git remote set-url origin "$REPO_URL" || true
+        git remote set-url origin "$REPO_URL" || GIT_OK=false
 
-        # жёстко синхронизируемся с origin
-        git fetch origin || true
-        git reset --hard origin/main || true
-        git clean -fd || true
+        if [ "$GIT_OK" = "true" ]; then
+            git fetch origin || GIT_OK=false
+            git reset --hard origin/main || GIT_OK=false
+            git clean -fd || GIT_OK=false
+        fi
     else
         echo "No git repo found → cloning"
+        git clone "$REPO_URL" . || GIT_OK=false
+    fi
 
-        # пробуем клонировать поверх
-        git clone "$REPO_URL" . || {
-            echo "Clone failed, continuing with existing files"
+    if [ "$GIT_OK" != "true" ]; then
+        echo "⚠️ Git sync failed → falling back to raw handler.py download"
+
+        curl -fsSL "$RAW_HANDLER_URL" -o handler.py || {
+            echo "❌ Fallback failed: could not download handler.py"
+            echo "Continuing with existing handler.py"
         }
     fi
 else
@@ -114,4 +122,5 @@ else
 fi
 
 exec python handler.py
+
 
