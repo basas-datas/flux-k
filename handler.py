@@ -216,7 +216,7 @@ def process_output_image(
     raw_bytes,
     target_size,
     original_size=True,
-    quality=90
+    quality=100
 ):
     img = Image.open(BytesIO(raw_bytes))
 
