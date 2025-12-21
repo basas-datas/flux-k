@@ -9,8 +9,40 @@ import urllib.parse
 import websocket
 import runpod
 import binascii
+import tempfile
 from PIL import Image
 from io import BytesIO
+
+# ================== GCS CREDENTIALS BOOTSTRAP ==================
+
+def ensure_gcs_credentials():
+    """
+    1. Если GOOGLE_APPLICATION_CREDENTIALS задан и файл существует — ничего не делаем
+    2. Иначе пробуем взять base64 из GCS_JSON_TOKEN,
+       декодируем, создаём json-файл и прописываем GOOGLE_APPLICATION_CREDENTIALS
+    """
+    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+    if cred_path and os.path.isfile(cred_path):
+        return
+
+    token_b64 = os.getenv("GCS_JSON_TOKEN")
+    if not token_b64:
+        return
+
+    try:
+        raw = base64.b64decode(token_b64)
+    except Exception as e:
+        raise RuntimeError("Invalid base64 in GCS_JSON_TOKEN") from e
+
+    fd, path = tempfile.mkstemp(prefix="gcs-", suffix=".json")
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+
+
+ensure_gcs_credentials()
 
 # ================== GCS ==================
 
