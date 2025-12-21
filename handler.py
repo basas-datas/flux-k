@@ -21,7 +21,7 @@ DEV = os.getenv("DEV", "UNSET")
 TEST = os.getenv("TEST", "UNSET")
 
 logger.info("=" * 80)
-logger.info("🚀🚀🚀  STARTING HANDLER = >>> 18 <<<")
+logger.info("🚀🚀🚀  STARTING HANDLER")
 logger.info(f"🔥🔥🔥  DEV  = >>> {DEV} <<<")
 logger.info(f"🔥🔥🔥  TEST = >>> {TEST} <<<")
 logger.info("=" * 80)
@@ -74,10 +74,7 @@ def load_image_bytes(image_url=None, image_base64=None):
             with urllib.request.urlopen(image_url, timeout=15) as response:
                 return response.read()
         except Exception as e:
-            raise RuntimeError(
-                "Failed to download image from 'image_url'. "
-                "Make sure the URL is publicly accessible."
-            ) from e
+            raise RuntimeError("Failed to download image from 'image_url'.") from e
 
     if image_base64:
         try:
@@ -85,52 +82,31 @@ def load_image_bytes(image_url=None, image_base64=None):
                 image_base64 = image_base64.split(",", 1)[1]
             return base64.b64decode(image_base64, validate=True)
         except (binascii.Error, ValueError) as e:
-            raise RuntimeError(
-                "Invalid 'image_base64'. The value must be valid base64-encoded image data."
-            ) from e
+            raise RuntimeError("Invalid 'image_base64'.") from e
 
     raise RuntimeError("No image source provided.")
 
 def save_image_bytes_as_jpeg(raw_bytes):
-    """
-    IMPORTANT:
-    - Saves to a fixed filename (like the old working version).
-    - Returns ABSOLUTE PATH to the saved file, so LoadImage receives a full path.
-      This restores the behavior that worked before.
-    """
     os.makedirs(COMFY_INPUT_DIR, exist_ok=True)
-
-    filename = "input_image.jpg"
-    out_path = os.path.join(COMFY_INPUT_DIR, filename)
+    out_path = os.path.join(COMFY_INPUT_DIR, "input_image.jpg")
 
     try:
         img = Image.open(BytesIO(raw_bytes))
         img.load()
     except Exception as e:
-        raise RuntimeError("Uploaded image is not a valid or supported image file.") from e
+        raise RuntimeError("Invalid image file.") from e
 
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    img.save(
-        out_path,
-        format="JPEG",
-        quality=100,
-        subsampling=0,
-        optimize=False
-    )
-
-    logger.info(f"🖼 Image overwritten: {out_path}")
-    return out_path  # <-- ABSOLUTE PATH (key change)
+    img.save(out_path, format="JPEG", quality=100, subsampling=0)
+    return out_path, img.size  # <-- возвращаем исходный размер
 
 # ================== COMFY API ==================
 
 def queue_prompt(prompt):
     url = f"http://{SERVER_ADDRESS}:8188/prompt"
-    payload = {
-        "prompt": prompt,
-        "client_id": CLIENT_ID
-    }
+    payload = {"prompt": prompt, "client_id": CLIENT_ID}
     data = json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
@@ -139,14 +115,8 @@ def queue_prompt(prompt):
         headers={"Content-Type": "application/json"}
     )
 
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        logger.error("❌ ComfyUI rejected prompt")
-        logger.error(body)
-        raise
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
 
 def get_history(prompt_id):
     url = f"http://{SERVER_ADDRESS}:8188/history/{prompt_id}"
@@ -177,21 +147,41 @@ def get_images(ws, workflow):
                     break
 
     history = get_history(prompt_id)[prompt_id]
-    outputs = {}
+    images = []
 
-    for node_id, node_output in history["outputs"].items():
-        images = []
+    for node_output in history["outputs"].values():
         if "images" in node_output:
             for img in node_output["images"]:
-                raw = get_image(
-                    img["filename"],
-                    img["subfolder"],
-                    img["type"],
-                )
-                images.append(base64.b64encode(raw).decode("utf-8"))
-        outputs[node_id] = images
+                raw = get_image(img["filename"], img["subfolder"], img["type"])
+                images.append(raw)
 
-    return outputs
+    return images
+
+# ================== IMAGE POSTPROCESS ==================
+
+def process_output_image(
+    raw_bytes,
+    target_size,
+    original_size=True,
+    quality=90
+):
+    img = Image.open(BytesIO(raw_bytes))
+
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    if original_size and img.size != target_size:
+        img = img.resize(target_size, Image.LANCZOS)
+
+    buf = BytesIO()
+    img.save(
+        buf,
+        format="JPEG",
+        quality=quality,
+        subsampling=0,
+        optimize=True
+    )
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 # ================== HANDLER ==================
 
@@ -203,23 +193,17 @@ def handler(job):
     image_base64 = job_input.get("image_base64")
     client_workflow = job_input.get("workflow")
 
+    original_size = job_input.get("original_size", True)
+    image_quality = int(job_input.get("image_quality", 90))
+    image_quality = max(0, min(100, image_quality))
+
     if not image_url and not image_base64:
-        return {"error": "Either 'image_url' or 'image_base64' must be provided."}
+        return {"error": "Image source missing."}
 
-    if image_url and image_base64:
-        return {"error": "Provide only one image source: 'image_url' or 'image_base64', not both."}
+    workflow = load_workflow(client_workflow)
+    raw_bytes = load_image_bytes(image_url=image_url, image_base64=image_base64)
+    image_path, input_size = save_image_bytes_as_jpeg(raw_bytes)
 
-    try:
-        workflow = load_workflow(client_workflow)
-        raw_bytes = load_image_bytes(image_url=image_url, image_base64=image_base64)
-
-        # ABSOLUTE PATH (restores old working behavior)
-        image_path = save_image_bytes_as_jpeg(raw_bytes)
-
-    except RuntimeError as e:
-        return {"error": str(e)}
-
-    # LoadImage node gets ABSOLUTE PATH (key change)
     workflow["1"]["inputs"]["image"] = image_path
 
     wait_for_comfyui()
@@ -232,12 +216,17 @@ def handler(job):
     finally:
         ws.close()
 
-    for node_id in images:
-        if images[node_id]:
-            logger.info("✅ Image generated")
-            return {"image": images[node_id][0]}
+    if not images:
+        return {"error": "No images generated."}
 
-    return {"error": "Workflow finished successfully but produced no images."}
+    final_image = process_output_image(
+        images[0],
+        target_size=input_size,
+        original_size=original_size,
+        quality=image_quality
+    )
+
+    return {"image": final_image}
 
 # ================== START ==================
 
