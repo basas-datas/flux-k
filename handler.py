@@ -12,6 +12,27 @@ import binascii
 from PIL import Image
 from io import BytesIO
 
+# ================== GCS ==================
+
+from google.cloud import storage
+
+GCS_BUCKET = os.getenv("GCS_BUCKET", "generations-reserve")
+
+_storage_client = storage.Client()
+
+def upload_to_gcs(image_bytes, content_type="image/jpeg"):
+    bucket = _storage_client.bucket(GCS_BUCKET)
+
+    filename = f"results/{uuid.uuid4().hex}.jpg"
+    blob = bucket.blob(filename)
+
+    blob.upload_from_string(
+        image_bytes,
+        content_type=content_type
+    )
+
+    return f"https://storage.googleapis.com/{GCS_BUCKET}/{filename}"
+
 # ================== LOGGING ==================
 
 logging.basicConfig(level=logging.INFO)
@@ -100,7 +121,7 @@ def save_image_bytes_as_jpeg(raw_bytes):
         img = img.convert("RGB")
 
     img.save(out_path, format="JPEG", quality=100, subsampling=0)
-    return out_path, img.size  # <-- возвращаем исходный размер
+    return out_path, img.size
 
 # ================== COMFY API ==================
 
@@ -181,7 +202,7 @@ def process_output_image(
         subsampling=0,
         optimize=True
     )
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    return buf.getvalue()
 
 # ================== HANDLER ==================
 
@@ -219,14 +240,18 @@ def handler(job):
     if not images:
         return {"error": "No images generated."}
 
-    final_image = process_output_image(
+    final_bytes = process_output_image(
         images[0],
         target_size=input_size,
         original_size=original_size,
         quality=image_quality
     )
 
-    return {"image": final_image}
+    image_url = upload_to_gcs(final_bytes)
+
+    return {
+        "image_url": image_url
+    }
 
 # ================== START ==================
 

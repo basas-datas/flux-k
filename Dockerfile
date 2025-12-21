@@ -8,12 +8,17 @@ RUN apt-get update && \
 RUN pip install -U "huggingface_hub[hf_transfer]"
 RUN pip install runpod websocket-client librosa
 
+# >>> ADD: GCS SUPPORT <<<
+RUN pip install google-cloud-storage
+# <<< END ADD >>>
+
 # Set working directory
 WORKDIR /
 
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git && \
     cd ComfyUI && \
     pip install --no-cache-dir -r requirements.txt
+
 RUN cd /ComfyUI/custom_nodes/ && \
     git clone https://github.com/ltdrdata/ComfyUI-Manager.git && \
     cd ComfyUI-Manager && \
@@ -24,7 +29,6 @@ RUN hf download Comfy-Org/flux1-kontext-dev_ComfyUI split_files/diffusion_models
 RUN hf download comfyanonymous/flux_text_encoders clip_l.safetensors --local-dir=/ComfyUI/models/clip/
 RUN hf download comfyanonymous/flux_text_encoders t5xxl_fp16.safetensors --local-dir=/ComfyUI/models/clip/
 RUN wget -q https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors -O /ComfyUI/models/vae/ae.safetensors
-
 
 COPY . .
 RUN chmod +x /entrypoint.sh
